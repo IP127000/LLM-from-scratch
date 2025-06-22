@@ -1,15 +1,17 @@
 from transformers import AutoModelForCausalLM, AutoTokenizer
+from modeling_dolly import DollyForCausalLM
 from datasets import load_dataset
 from trl import SFTConfig, SFTTrainer, setup_chat_format
 import torch
 import os
+import deepspeed
 
-device = "cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu"
+deepspeed.init_distributed()
 
 model_path = "./model"
 tokenizer_path = "./model" 
 
-model = AutoModelForCausalLM.from_pretrained(model_path).to(device)
+model = DollyForCausalLM.from_pretrained(model_path)
 tokenizer = AutoTokenizer.from_pretrained(tokenizer_path)
 
 try:
@@ -42,7 +44,8 @@ finetune_name = "Dolly-SFT"
 sft_config = SFTConfig(
     output_dir="./sft_output",
     max_steps=1000000,
-    per_device_train_batch_size=4,
+    per_device_train_batch_size=16,  
+    per_device_eval_batch_size=2,
     learning_rate=5e-5,
     logging_steps=10,
     save_steps=1000,
@@ -50,8 +53,11 @@ sft_config = SFTConfig(
     evaluation_strategy="steps",
     eval_steps=500,
     load_best_model_at_end=True, 
-    resume_from_checkpoint=True,  
+    resume_from_checkpoint=True,
     hub_model_id=finetune_name,
+    deepspeed="./config/ds_config.json",  
+    fp16=True,  
+    gradient_accumulation_steps=8, 
 )
 
 trainer = SFTTrainer(
@@ -73,15 +79,22 @@ if os.path.exists(sft_config.output_dir):
         checkpoint_dir = latest_checkpoint
         print(f"Resuming training from checkpoint: {latest_checkpoint}")
 
+
 trainer.train(resume_from_checkpoint=checkpoint_dir)
 
-trainer.save_model(f"./{finetune_name}")
+if trainer.is_world_process_zero():
+    trainer.save_model(f"./{finetune_name}")
+    
+    device = "cuda:0" if torch.cuda.is_available() else "cpu"
+    model = AutoModelForCausalLM.from_pretrained(f"./{finetune_name}").to(device)
+    tokenizer = AutoTokenizer.from_pretrained(f"./{finetune_name}")
 
-prompt = "Write a haiku about programming"
-messages = [{"role": "user", "content": prompt}]
-formatted_prompt = tokenizer.apply_chat_template(messages, tokenize=False)
+    prompt = "Write a haiku about programming"
+    messages = [{"role": "user", "content": prompt}]
+    formatted_prompt = tokenizer.apply_chat_template(messages, tokenize=False)
 
-inputs = tokenizer(formatted_prompt, return_tensors="pt").to(device)
-outputs = model.generate(**inputs, max_new_tokens=100)
-print("\nAfter training:")
-print(tokenizer.decode(outputs[0], skip_special_tokens=True))
+    inputs = tokenizer(formatted_prompt, return_tensors="pt").to(device)
+    outputs = model.generate(**inputs, max_new_tokens=100)
+    print("\nAfter training:")
+    print(tokenizer.decode(outputs[0], skip_special_tokens=True))
+    #deepspeed --num_gpus 8 step4_cold_start.py
