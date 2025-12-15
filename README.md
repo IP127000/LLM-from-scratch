@@ -1,5 +1,4 @@
-# LLM-Dolly
-LLM-Dolly is a custom LLM built from scratch   
+# LLM built from scratch   
 持续优化更新中...
 
 🗓️ 更新日志
