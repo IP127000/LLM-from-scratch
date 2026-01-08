@@ -1,3 +1,4 @@
+**Read this in other languages: [English](README.md), [中文](README_zh.md).**
 # LLM built from scratch   
 持续优化更新中...
 
